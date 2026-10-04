@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Campus Safety — Admin</title>
+  <link rel="stylesheet" href="/static/assets/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="shield">🛡️</span><h1>Admin · Transparency</h1></div>
+    <nav><a href="/">Student</a><a href="/dashboard">Security</a><a href="/admin" class="active">Admin</a></nav>
+  </header>
+
+  <div class="wrap">
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:20px" id="top-grid">
+      <div class="panel">
+        <h2>Published risk weights</h2>
+        <p class="sub">Hand-set for the MVP and shown here on purpose: any score on the dashboard can be reproduced by hand. With real incident data we would calibrate these.</p>
+        <table id="weights"></table>
+        <h2 style="margin-top:18px" class="small">Hard overrides (safety floors)</h2>
+        <table id="overrides"></table>
+      </div>
+
+      <div class="panel">
+        <h2>Detection & privacy</h2>
+        <dl class="kv" id="detector-kv"></dl>
+        <h2 style="margin-top:18px" class="small">Detector licensing</h2>
+        <div id="licenses" class="small"></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h2>Scope — what runs vs what's roadmap</h2>
+      <p class="sub">Honest tagging, matching the deck. Everything tagged MVP is live in this build.</p>
+      <table id="scope"></table>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <h2>Audit log <span class="small muted">(role-based: admin only)</span></h2>
+      <p class="sub">Every status change and privileged read is recorded. This is the accountability trail behind the privacy claims.</p>
+      <table id="audit"><thead><tr><th>Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+
+  <script src="/static/assets/app.js"></script>
+  <script>
+    const SCOPE = [
+      ["Student SOS with zone location", "mvp"],
+      ["Video fall detection (persistence timer)", "mvp"],
+      ["Video crowd detection (per-zone count)", "mvp"],
+      ["Explainable risk score + contribution bars", "mvp"],
+      ["Multi-signal verification (SOS ⇄ video fusion)", "mvp"],
+      ["Live security dashboard + status workflow", "mvp"],
+      ["Role-based access + audit log", "mvp"],
+      ["Swappable detector backends (YOLO / OpenCV-DNN / scripted)", "mvp"],
+      ["Predictive risk zones (historical frequency)", "roadmap"],
+      ["Safe-route recommendation", "roadmap"],
+      ["Automatic personnel assignment / dispatch", "roadmap"],
+      ["Violence / fight detection", "roadmap"],
+    ];
+
+    async function boot() {
+      const w = await api("/api/weights");
+
+      const wt = document.getElementById("weights");
+      wt.innerHTML = "<thead><tr><th>Signal</th><th>Weight</th></tr></thead>";
+      const wb = el("tbody");
+      for (const [k, v] of Object.entries(w.weights)) wb.append(el("tr", {}, el("td", {}, k), el("td", {}, String(v))));
+      wt.append(wb);
+
+      const ot = document.getElementById("overrides");
+      ot.innerHTML = "<thead><tr><th>Override</th><th>Floor</th></tr></thead>";
+      const ob = el("tbody");
+      for (const [k, v] of Object.entries(w.overrides)) ob.append(el("tr", {}, el("td", {}, k), el("td", {}, String(v))));
+      ot.append(ob);
+
+      const kv = document.getElementById("detector-kv");
+      kv.append(el("dt", {}, "Active backend"), el("dd", {}, w.detector.active_backend));
+      kv.append(el("dt", {}, "Corroboration window"), el("dd", {}, w.corroboration_window_s + "s"));
+      kv.append(el("dt", {}, "Fall hold timer"), el("dd", {}, w.event_hold_s.fall + "s"));
+      kv.append(el("dt", {}, "Crowd hold timer"), el("dd", {}, w.event_hold_s.crowd + "s"));
+      kv.append(el("dt", {}, "Privacy"), el("dd", {}, w.detector.privacy));
+
+      const lic = document.getElementById("licenses");
+      for (const [key, info] of Object.entries(w.detector.licenses)) {
+        const active = key === w.detector.active_backend;
+        lic.append(el("div", { style: "margin-bottom:8px;padding:8px;border:1px solid var(--line);border-radius:8px;" + (active ? "border-color:var(--accent)" : "") },
+          el("strong", {}, info.name + (active ? "  ← active" : "")),
+          el("div", { class: "muted" }, info.license),
+          el("div", { class: "small muted" }, info.note)));
+      }
+
+      const sc = document.getElementById("scope");
+      sc.innerHTML = "<thead><tr><th>Feature</th><th>Status</th></tr></thead>";
+      const sb = el("tbody");
+      for (const [name, tag] of SCOPE)
+        sb.append(el("tr", {}, el("td", {}, name),
+          el("td", {}, el("span", { class: "tag " + tag }, tag === "mvp" ? "MVP" : "Roadmap"))));
+      sc.append(sb);
+
+      await loadAudit();
+    }
+
+    async function loadAudit() {
+      const tbody = document.querySelector("#audit tbody");
+      tbody.innerHTML = "";
+      try {
+        const rows = await api("/api/audit?limit=100", { headers: { "X-Role": "admin" } });
+        for (const r of rows)
+          tbody.append(el("tr", {},
+            el("td", {}, fmtTime(r.ts)), el("td", {}, r.actor), el("td", {}, r.role),
+            el("td", {}, r.action), el("td", {}, r.target || "—"), el("td", { class: "small muted" }, r.detail || "")));
+        if (!rows.length) tbody.append(el("tr", {}, el("td", { colspan: 6, class: "muted" }, "No audit entries yet.")));
+      } catch (e) {
+        tbody.append(el("tr", {}, el("td", { colspan: 6, class: "muted" }, "Access denied or unavailable: " + e.message)));
+      }
+    }
+
+    boot().catch((e) => toast("Load failed: " + e.message));
+    setInterval(loadAudit, 5000);
+  </script>
+</body>
+</html>

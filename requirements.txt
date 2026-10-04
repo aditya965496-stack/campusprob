@@ -1,0 +1,13 @@
+# Core runtime — everything the live demo needs. Deliberately small so a demo
+# machine can `pip install -r requirements.txt` and run, offline, in minutes.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# OpenCV ships its own prebuilt wheels; no system libs needed on Windows.
+opencv-python>=4.8
+numpy>=1.24
+# pydantic v2 ships with modern FastAPI; pinned for clarity.
+pydantic>=2.5
+
+# Dev / test only:
+pytest>=8.0
+httpx>=0.27        # FastAPI TestClient dependency

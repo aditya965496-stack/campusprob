@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Data: the DB and any footage/clips are local, never committed.
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/clips/
+data/models/
+*.pt
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,9 @@
+# Optional ML detection stack. The system runs WITHOUT these — it falls back to
+# the OpenCV-DNN or scripted detector. Install only if you want live YOLO.
+#
+# LICENCE NOTE: ultralytics is AGPL-3.0. Fine for a hackathon demo; a hosted
+# product must open-source under AGPL or buy a commercial licence, or swap to a
+# permissive detector (YOLOX Apache-2.0, torchvision BSD-3) behind the same
+# Detector interface in campus_safety/detectors/.
+ultralytics>=8.1
+# torch is pulled in by ultralytics; on a CPU-only machine the CPU wheel is fine.

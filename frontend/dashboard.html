@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Campus Safety — Security Dashboard</title>
+  <link rel="stylesheet" href="/static/assets/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="shield">🛡️</span><h1>Security Dashboard</h1></div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <span class="badge" id="backend-badge" title="Active detection backend"><span class="dot"></span><span id="backend">detector…</span></span>
+      <span class="badge" id="ws-badge"><span class="dot"></span><span id="ws-text">connecting…</span></span>
+      <nav><a href="/">Student</a><a href="/dashboard" class="active">Security</a><a href="/admin">Admin</a></nav>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="stat-row" style="margin-bottom:20px">
+      <div class="stat"><div class="n" id="s-open">0</div><div class="l">Open incidents</div></div>
+      <div class="stat"><div class="n" id="s-critical">0</div><div class="l">Critical / high</div></div>
+      <div class="stat"><div class="n" id="s-fps">0</div><div class="l">Inference FPS</div></div>
+      <div class="stat"><div class="n" id="s-events">0</div><div class="l">Video events fired</div></div>
+    </div>
+
+    <div class="grid dash">
+      <div class="panel">
+        <h2>Live campus map</h2>
+        <p class="sub">Zones shaded by 30-day risk. Red outline = open incident. Click a zone to filter.</p>
+        <div class="map-frame"><svg id="map"></svg></div>
+        <div class="btn-row">
+          <button onclick="simulate('fall_then_sos')">▶ Demo: fall + SOS (fusion)</button>
+          <button onclick="simulate('crowd')">▶ Demo: crowd</button>
+          <button id="clear-filter" style="display:none" onclick="setFilter(null)">✕ Clear zone filter</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Incident queue <span class="small muted" id="filter-label"></span></h2>
+        <p class="sub">Sorted by priority. Click <em>Why?</em> to see the score breakdown.</p>
+        <div id="incidents"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/assets/app.js"></script>
+  <script>
+    let ZONES = [], INCIDENTS = [], FILTER = null, EXPANDED = new Set();
+    const map = document.getElementById("map");
+
+    async function refreshZones() {
+      ZONES = await api("/api/zones");
+      drawMap();
+    }
+    function zoneById(id) { return ZONES.find((z) => z.id === id); }
+
+    function drawMap() {
+      renderMap(map, ZONES, { onZoneClick: (z) => setFilter(z.id) });
+    }
+
+    async function refreshIncidents() {
+      INCIDENTS = await api("/api/incidents?limit=300");
+      renderIncidents();
+      renderStats();
+    }
+
+    function renderStats() {
+      const open = INCIDENTS.filter((i) => i.status !== "resolved");
+      document.getElementById("s-open").textContent = open.length;
+      document.getElementById("s-critical").textContent =
+        open.filter((i) => i.severity === "critical" || i.severity === "high").length;
+    }
+
+    function renderIncidents() {
+      const host = document.getElementById("incidents");
+      host.innerHTML = "";
+      let list = INCIDENTS.slice();
+      if (FILTER) list = list.filter((i) => i.zone_id === FILTER);
+      // Open first, then by priority.
+      list.sort((a, b) =>
+        (a.status === "resolved") - (b.status === "resolved") || b.priority - a.priority);
+      if (!list.length) { host.append(el("div", { class: "muted small" }, "No incidents.")); return; }
+      for (const inc of list.slice(0, 60)) host.append(renderIncident(inc));
+    }
+
+    function renderIncident(inc) {
+      const zone = zoneById(inc.zone_id);
+      const card = el("div", { class: "incident sev-" + inc.severity });
+      card.append(
+        el("div", { class: "row" },
+          el("div", {},
+            el("div", { class: "type" }, prettyType(inc.type)),
+            el("div", { class: "meta" }, `${zone ? zone.name : inc.zone_id} · ${ago(inc.ts)}`)
+          ),
+          el("span", { class: "score" }, Math.round(inc.priority))
+        )
+      );
+      const chips = el("div", { style: "margin:8px 0" },
+        el("span", { class: "chip source-" + inc.source }, inc.source.toUpperCase()),
+        el("span", { class: "chip status-" + inc.status }, inc.status)
+      );
+      card.append(chips);
+      if (inc.note) card.append(el("div", { class: "small muted" }, inc.note));
+
+      const actions = el("div", { class: "btn-row" });
+      actions.append(el("button", { class: "small", onclick: () => toggleWhy(inc, card) },
+        EXPANDED.has(inc.id) ? "Hide why" : "Why?"));
+      for (const next of nextStatuses(inc.status)) {
+        actions.append(el("button", { class: "small" + (next === "acknowledged" ? " primary" : ""),
+          onclick: () => advance(inc, next) }, labelFor(next)));
+      }
+      card.append(actions);
+      if (EXPANDED.has(inc.id)) card.append(renderBars(inc.signals));
+      return card;
+    }
+
+    function prettyType(t) {
+      return { sos: "🆘 Student SOS", video_fall: "🧍 Fall detected", video_crowd: "👥 Crowding" }[t] || t;
+    }
+    function nextStatuses(status) {
+      return { new: ["acknowledged"], acknowledged: ["dispatched"], dispatched: ["resolved"], resolved: [] }[status] || [];
+    }
+    function labelFor(s) {
+      return { acknowledged: "Acknowledge", dispatched: "Dispatch", resolved: "Resolve" }[s] || s;
+    }
+
+    function toggleWhy(inc, card) {
+      if (EXPANDED.has(inc.id)) EXPANDED.delete(inc.id); else EXPANDED.add(inc.id);
+      renderIncidents();
+    }
+
+    async function advance(inc, status) {
+      try {
+        await api(`/api/incidents/${inc.id}`, {
+          method: "PATCH",
+          headers: { "X-Role": "security" },
+          body: JSON.stringify({ status, actor: "guard", role: "security" }),
+        });
+        toast(`Incident #${inc.id} → ${status}`);
+      } catch (e) { toast("Update failed: " + e.message); }
+    }
+
+    function setFilter(zoneId) {
+      FILTER = zoneId;
+      document.getElementById("clear-filter").style.display = zoneId ? "" : "none";
+      const z = zoneById(zoneId);
+      document.getElementById("filter-label").textContent = z ? `— ${z.name}` : "";
+      renderIncidents();
+    }
+
+    async function simulate(scenario) {
+      try { await api(`/api/demo/simulate?scenario=${scenario}`, { method: "POST" }); }
+      catch (e) { toast("Demo failed: " + e.message); }
+    }
+
+    // --- live updates ---
+    function onWsMessage(msg) {
+      if (msg.kind === "hello") {
+        if (msg.zones) { ZONES = msg.zones.map(normaliseZone); }
+        applyStats(msg.stats);
+        refreshZones();
+      } else if (msg.kind === "incident") {
+        const inc = msg.incident;
+        const idx = INCIDENTS.findIndex((i) => i.id === inc.id);
+        if (idx >= 0) INCIDENTS[idx] = inc; else INCIDENTS.unshift(inc);
+        const zone = zoneById(inc.zone_id);
+        if (zone && inc.status !== "resolved") pinOnMap(map, zone, inc.severity);
+        renderIncidents();
+        renderStats();
+        applyStats(msg.stats);
+        refreshZones();  // keep open-incident outlines fresh
+        if (inc.status === "new") toast(`New ${prettyType(inc.type)} · priority ${Math.round(inc.priority)}`);
+      }
+    }
+    function normaliseZone(z) { return z; }
+    function applyStats(stats) {
+      if (!stats) return;
+      if (stats.process_fps != null) document.getElementById("s-fps").textContent = stats.process_fps;
+      if (stats.events_fired != null) document.getElementById("s-events").textContent = stats.events_fired;
+      if (stats.backend) { document.getElementById("backend").textContent = stats.backend; }
+    }
+
+    connectWS(onWsMessage, (up) => {
+      const b = document.getElementById("ws-badge");
+      b.classList.toggle("live", up);
+      document.getElementById("ws-text").textContent = up ? "live" : "offline";
+    });
+
+    async function boot() {
+      await refreshZones();
+      await refreshIncidents();
+      const stats = await api("/api/stats");
+      applyStats(stats.pipeline);
+      document.getElementById("backend").textContent = stats.detector_backend;
+      document.getElementById("backend-badge").classList.add("live");
+    }
+    boot().catch((e) => toast("Boot failed: " + e.message));
+    setInterval(() => api("/api/stats").then((s) => applyStats(s.pipeline)).catch(() => {}), 3000);
+  </script>
+</body>
+</html>

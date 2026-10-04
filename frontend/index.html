@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Campus Safety — Student SOS</title>
+  <link rel="stylesheet" href="/static/assets/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="shield">🛡️</span><h1>Campus Safety</h1></div>
+    <nav>
+      <a href="/" class="active">Student</a>
+      <a href="/dashboard">Security</a>
+      <a href="/admin">Admin</a>
+    </nav>
+  </header>
+
+  <div class="wrap">
+    <div class="grid" style="max-width:560px;margin:0 auto">
+      <div class="panel">
+        <h2>Raise an SOS</h2>
+        <p class="sub">Your location is captured at the <strong>zone</strong> level — we don't track precise GPS indoors, and we never use your camera or identity.</p>
+
+        <div class="sos-wrap">
+          <button id="sos" class="sos-btn">SOS</button>
+          <div class="small muted" id="hint">Tap to alert campus security</div>
+        </div>
+
+        <label for="zone">Where are you?</label>
+        <select id="zone"></select>
+
+        <label for="note">What's happening? (optional)</label>
+        <textarea id="note" rows="2" placeholder="e.g. someone collapsed near the bleachers"></textarea>
+      </div>
+
+      <div class="panel" id="result-panel" style="display:none">
+        <h2>Alert sent ✓</h2>
+        <p class="sub">Security has been notified and can see this on the live map.</p>
+        <div id="result"></div>
+      </div>
+
+      <div class="panel">
+        <h2 class="small">Privacy</h2>
+        <p class="small muted" style="margin:0">
+          No face recognition. No video is stored. We record only that an alert
+          was raised, its zone, and the time — aligned with DPDP 2023 principles
+          (notice, consent, purpose limitation, retention).
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/assets/app.js"></script>
+  <script>
+    async function loadZones() {
+      const zones = await api("/api/zones");
+      const sel = document.getElementById("zone");
+      sel.innerHTML = "";
+      for (const z of zones) sel.append(el("option", { value: z.id }, z.name));
+    }
+
+    async function sendSos() {
+      const btn = document.getElementById("sos");
+      btn.disabled = true;
+      try {
+        const incident = await api("/api/sos", {
+          method: "POST",
+          body: JSON.stringify({
+            zone_id: document.getElementById("zone").value,
+            note: document.getElementById("note").value,
+          }),
+        });
+        showResult(incident);
+        toast("SOS sent — security notified");
+      } catch (e) {
+        toast("Failed to send: " + e.message);
+      } finally {
+        setTimeout(() => (btn.disabled = false), 1500);
+      }
+    }
+
+    function showResult(incident) {
+      const panel = document.getElementById("result-panel");
+      const out = document.getElementById("result");
+      panel.style.display = "block";
+      out.innerHTML = "";
+      const sev = incident.severity;
+      out.append(
+        el("div", { class: "incident sev-" + sev },
+          el("div", { class: "row" },
+            el("span", { class: "type" }, "Your SOS"),
+            el("span", { class: "score" }, Math.round(incident.priority))
+          ),
+          el("div", { class: "meta" }, `Priority ${sev.toUpperCase()} · zone ${incident.zone_id} · ${fmtTime(incident.ts)}`),
+          renderBars(incident.signals)
+        )
+      );
+    }
+
+    document.getElementById("sos").addEventListener("click", sendSos);
+    loadZones().catch((e) => toast("Could not load zones: " + e.message));
+  </script>
+</body>
+</html>
